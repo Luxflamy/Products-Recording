@@ -1,3 +1,5 @@
+from multiprocessing import process
+from shutil import which
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -15,16 +17,21 @@ CSV_FILE = "退货.csv"
 IMAGE_FOLDER = "uploaded_images"
 DEFAULT_COLUMNS = {
     'timestamp': '退货时间',
+    'Process_time': 'Amazon退货处理时间',
     'tracking_number': '货件号',
-    'product_name': '产品名称',
-    'barcode': '条形码',
+    'product_name': '产品名称(SKU)',
+    'barcode': '条形码(FNSKU)',
+    'LPN_barcode': 'LPN条形码',
     'SAIN': 'SAIN码',
     'product_name_actual': '实际产品名称',
     'return_reason': '退货原因',
     'notes': '备注',
+    'quality_check': '质检结果',
     'image_name': '图片文件名'
 }
+
 RETURN_REASONS = ["包装破损", "包装较脏", "运输损坏", "其他原因"]
+QUALITY_CHECKS = ["良品","次品", "非品"]
 
 def init_data():
     if not os.path.exists(CSV_FILE):
@@ -33,13 +40,26 @@ def init_data():
             writer.writerow(DEFAULT_COLUMNS.keys())
     os.makedirs(IMAGE_FOLDER, exist_ok=True)
 
-def add_return(product_name, barcode, return_reason, notes, image_name=''):
+def add_return(tracking_number, product_name, barcode, SAIN, LPN_barcode, product_name_actual, return_reason, notes, image_name='', quality_check='', process_time=''):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     with open(CSV_FILE, mode='a', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow([timestamp, product_name, barcode, return_reason, notes, image_name])
+        writer.writerow([
+            timestamp,
+            process_time,
+            tracking_number,
+            product_name,
+            barcode,
+            SAIN,
+            LPN_barcode,
+            product_name_actual,
+            return_reason,
+            notes,
+            quality_check,
+            image_name
+        ])
     st.success(f"已添加退货记录: {product_name} - {barcode}")
-
+    
 @st.cache_data
 def load_data():
     try:
@@ -71,7 +91,7 @@ def export_to_excel(df_selected, export_path):
 
     for i, (_, row) in enumerate(df_selected.iterrows(), start=2):
         for j in range(len(base_headers)):
-            ws.cell(row=i, column=j+1, value=row[j])
+            ws.cell(row=i, column=j+1, value=row.iloc[j])
 
         images = [img.strip() for img in str(row['图片文件名']).split(',') if img.strip()]
         for k, img_name in enumerate(images):
@@ -118,11 +138,18 @@ def main():
     with st.form("add_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            product_name = st.text_input("产品名称*", placeholder="例如: BT-Ice Grey-Twin")
-            barcode = st.text_input("条形码*", placeholder="例如: 799392016279")
+            tracking_number = st.text_input("货件号*", placeholder="例如: 1Z12345E1512345676")
+            process_time = st.text_input("实际退货处理时间", placeholder="例如: 2024-10-01 14:30")
+            product_name = st.text_input("产品名称(SKU)*", placeholder="例如: BT-Ice Grey-Twin")
+            barcode = st.text_input("条形码(FNSKU)*", placeholder="例如: 799392016279")
+            quality_check = st.selectbox("质检结果*", QUALITY_CHECKS)
         with col2:
+            SAIN = st.text_input("SAIN码", placeholder="例如: S123456789")
+            LPN_barcode = st.text_input("LPN条形码", placeholder="例如: LPN123456789")
+            product_name_actual = st.text_input("实际产品名称", placeholder="用于记录实际退货的产品,防止货不对版")
             return_reason = st.selectbox("退货原因*", RETURN_REASONS)
             notes = st.text_area("备注", placeholder="可填写详细说明")
+            
 
         uploaded_images = st.file_uploader("上传退货图片（可多选）", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
@@ -140,7 +167,7 @@ def main():
                         f.write(img.getbuffer())
                     image_names.append(img_name)
                 image_name_str = ",".join(image_names)
-                add_return(product_name, barcode, return_reason, notes, image_name_str)
+                add_return(tracking_number, product_name, barcode, SAIN, LPN_barcode, product_name_actual, return_reason, notes, image_name_str, quality_check, process_time)
                 st.rerun()
 
     # ---------------- 展示统计 ----------------
@@ -150,11 +177,11 @@ def main():
 
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.write("**按产品名称统计**")
-            st.dataframe(df["产品名称"].value_counts().reset_index().rename(columns={"index": "产品名称", "产品名称": "退货次数"}))
+            st.write("**按产品名称(SKU)统计**")
+            st.dataframe(df["产品名称(SKU)"].value_counts().reset_index().rename(columns={"index": "产品名称(SKU)", "产品名称(SKU)": "退货次数"}))
         with col2:
-            st.write("**按条形码统计**")
-            st.dataframe(df["条形码"].value_counts().reset_index().rename(columns={"index": "条形码", "条形码": "退货次数"}))
+            st.write("**按条形码(FNSKU)统计**")
+            st.dataframe(df["条形码(FNSKU)"].value_counts().reset_index().rename(columns={"index": "条形码(FNSKU)", "条形码(FNSKU)": "退货次数"}))
         with col3:
             st.write("**按退货原因统计**")
             st.dataframe(df["退货原因"].value_counts().reset_index().rename(columns={"index": "退货原因", "退货原因": "次数"}))
@@ -187,7 +214,7 @@ def main():
         selected_rows_idx = st.multiselect(
             "选择要导出的行（支持多选）",
             options=df_display["行号"].tolist(),
-            format_func=lambda x: f"第 {int(x)+1} 行 - {df_display.iloc[int(x)]['产品名称']}"
+            format_func=lambda x: f"第 {int(x)+1} 行 - {df_display.iloc[int(x)]['产品名称(SKU)']} / {df_display.iloc[int(x)]['实际产品名称']}"
         )
 
         if selected_rows_idx:
